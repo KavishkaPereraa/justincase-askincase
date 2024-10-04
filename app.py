@@ -1,6 +1,7 @@
 import streamlit as st
 import os
 import time
+import math
 from langchain_groq import ChatGroq
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.chains.combine_documents import create_stuff_documents_chain
@@ -19,7 +20,7 @@ groq_api_key = os.getenv('GROQ_API_KEY')
 os.environ["GOOGLE_API_KEY"] = os.getenv("GOOGLE_API_KEY")
 
 # Initialize Streamlit app
-st.title("Ask In Case!")
+st.title("Ask In Cases!")
 
 # Create LLM model instance
 llm = ChatGroq(groq_api_key=groq_api_key, model_name="Llama3-8b-8192")
@@ -48,12 +49,42 @@ def load_embeddings():
             # Document chunking with adjusted chunk size and overlap
             text_splitter = RecursiveCharacterTextSplitter(chunk_size=1500, chunk_overlap=300)
             final_documents = text_splitter.split_documents(docs)
+            total_requests = len(final_documents)
 
-            # Generate embeddings
+            # Number of requests you can send per minute
+            requests_per_minute = 150
+            batches = math.ceil(total_requests / requests_per_minute)  # Number of batches needed
+
+            # Calculate estimated time in minutes
+            estimated_time = batches  # 1 minute per batch
+            st.write(f"Total requests: {total_requests}")
+            st.write(f"Estimated time to process all requests: {estimated_time} minutes")
+
+            # Initialize embeddings
             embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001")
-            vector_store = FAISS.from_documents(final_documents, embeddings)
+            vector_store = None
+
+            # Process documents in batches
+            for i in range(batches):
+                # Determine the range of documents to process in this batch
+                start_index = i * requests_per_minute
+                end_index = min(start_index + requests_per_minute, total_requests)
+                batch_docs = final_documents[start_index:end_index]
+
+                try:
+                    # Process batch and create embeddings
+                    vector_store = FAISS.from_documents(batch_docs, embeddings)
+                    st.write(f"Processed batch {i+1}/{batches} (documents {start_index + 1} to {end_index})")
+
+                    if i < batches - 1:  # Sleep only between batches, not after the last one
+                        time.sleep(60)  # Wait for 1 minute to stay within the limit
+
+                except Exception as e:
+                    st.error(f"Error during embedding in batch {i+1}: {e}")
+
             st.write("Document embeddings created successfully.")
             return vector_store
+
     except Exception as e:
         st.error(f"Error during embedding: {e}")
         return None
@@ -101,14 +132,14 @@ if st.button("Submit"):
                     st.write(f"Source: {doc.metadata.get('source', 'Unknown')} (Similarity score: {similarity_score})")
 
                     snippet = doc.page_content[:min(500, len(doc.page_content))]  # Show excerpt of 500 characters
-                    st.text_area("Document Excerpt", snippet, height=200)
+                    st.text_area(f"Document Excerpt {index+1}", snippet, height=200, key=f"snippet_{index}")  # Unique key
 
                     if len(doc.page_content) > 500:
                         if st.button(f"Show full content for document {doc.metadata.get('source', 'Unknown')}", key=f"button_{index}"):
                             st.write(doc.page_content)
 
                     st.write("--------------------------------")
-    
+
     except Exception as e:
         st.error(f"Error during document retrieval: {e}")
 
